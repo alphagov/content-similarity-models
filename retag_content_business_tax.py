@@ -14,33 +14,15 @@ class Node:
         return re.sub(r'\W+', '', self.title) + ".pkl"
 
 def get_embedded_sentences_for_taxon(content, taxon):
-    # Calculating these is _slow_ so we store them on the hard drive
-    # Open question as to whether we re-calculate these as stuff gets re-tagged
-    # to a branch. I _suspect_ we shouldn't as we could end up subtly changing
-    # the aboutness of a taxon, especially if there isn't much content there to begin
-    # with, leading to poor overall outcome
-    print("starting embedded sentences for taxon: " + taxon.title)
-    filepath = labelled_file_path = os.path.join(ENCODINGSDATADIR, taxon.embeddings_file_name())
-    if os.path.exists(filepath):
-        print("encodings exist on hard drive")
-        with open(filepath, 'rb') as fp:
-            return pickle.load(fp)
     content_taxon_mapping_path = os.path.join(DATADIR, 'content_to_taxon_map.csv')
     content_taxon_mapping = pd.read_csv(content_taxon_mapping_path, low_memory=False)
     content_ids_for_taxon = list(content_taxon_mapping[content_taxon_mapping['taxon_id'] == taxon.content_id]['content_id'])
-    combined_text_for_content_in_taxon = list(content[content['content_id'].isin(content_ids_for_taxon)]['combined_text'])
-    with tf.Session() as session:
-        session.run([tf.global_variables_initializer(), tf.tables_initializer()])
-        embedded_text_for_content_in_taxon = session.run(embed(combined_text_for_content_in_taxon))
-    with open(filepath, 'wb') as fp:
-        pickle.dump(embedded_text_for_content_in_taxon, fp, protocol=pickle.HIGHEST_PROTOCOL)
-    print("Embedded sentences for taxon and saved to file: " + taxon.title)
-    return embedded_text_for_content_in_taxon
+    return content[content['content_id'].isin(content_ids_for_taxon)]['embedded_sentences']
 
 def get_score_for_item(content, embedded_sentences_for_taxon):
     content_generator = pairwise_distances_chunked(
-        X=content,
-        Y=embedded_sentences_for_taxon,
+        X=[embedded_content],
+        Y=embedded_sentences_for_taxon.to_list(),
         working_memory=0,
         metric='cosine',
         n_jobs=-1)
@@ -70,8 +52,6 @@ import pandas as pd
 from sklearn.metrics import pairwise_distances_chunked
 import re
 import tensorflow as tf
-import tensorflow_hub as hub
-import pickle
 import operator
 from sklearn.feature_extraction.text import TfidfVectorizer
 
@@ -94,13 +74,8 @@ with gzip.open(taxons_path, mode='rt') as input_file:
 labelled_file_path = os.path.join(DATADIR, 'labelled.csv.gz')
 labelled = pd.read_csv(labelled_file_path, compression='gzip', low_memory=False)
 
-clean_content_path = os.path.join(DATADIR, 'clean_content.csv')
-content = pd.read_csv(clean_content_path, low_memory=False)
-
-# Load Universal Sentence Encoder
-module_url = "https://tfhub.dev/google/universal-sentence-encoder/2"
-embed = hub.Module(module_url)
-
+clean_content_path = os.path.join(DATADIR, 'embedded_clean_content.pkl')
+content = pd.read_pickle(clean_content_path)
 
 # Lets just say that we have the relevant information
 # Current taxon is the taxon we're trying to improve, here it's manually set to business-tax
@@ -116,11 +91,7 @@ best_fits = {}
 suggested_taxons = {}
 for content_to_retag_base_path in list_of_content_to_retag:
     print("attempting_to_retag:" + content_to_retag_base_path)
-    combined_text = content[content['base_path'] == content_to_retag_base_path].iloc[0,:]['combined_text']
-    embedded_content = None
-    with tf.Session() as session:
-        session.run([tf.global_variables_initializer(), tf.tables_initializer()])
-        embedded_content = session.run(embed([combined_text]))
+    embedded_content = content[content['base_path'] == content_to_retag_base_path].iloc[0,:]['embedded_sentences']
     embedded_sentences_for_taxon = get_embedded_sentences_for_taxon(content, current_taxon)
     # Get the score of the content item against the taxon it's currently in
     current_score = get_score_for_item(embedded_content, embedded_sentences_for_taxon)
