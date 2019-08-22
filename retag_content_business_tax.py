@@ -129,28 +129,16 @@ def get_cosine_scores_for_sibling_and_children_taxons(current_taxon, embedded_co
 def get_distance_cosine_scores(mean_cosine_score_for_each_taxon, all_cosine_scores_for_each_taxon):
     distance_cosine_score_for_each_taxon = {}
     for i, scores in enumerate(mean_cosine_score_for_each_taxon):
-        # Here we make a 2D 'graph' of the scores below 0.5 and calculate just one K-means centroid
-        # We calculate the distance from the centroid for each score. The distance is then multiplied by the score
-        # for that distance and penalised if it is above (and penalised more for how much further it is above)
-        # and rewarded if it is below (and rewarded more if it is further below)
-        all_scores = all_cosine_scores_for_each_taxon[scores[0]]
-        coords = []
-        for score in all_scores:
-            if score <= 0.5:
-                coords.append([score, score])
-        if coords:
-            X = np.array(coords)
-            kmeans = KMeans(n_clusters=1, random_state=0).fit(X)
-            centroid = kmeans.cluster_centers_[0]
-            total_distance = 0
-            for coord_index, coord in enumerate(coords):
-                distance = calculate_distance(coord[0], coord[1], centroid[0], centroid[1])
-                if coord[0] > centroid[0]:
-                    total_distance += (1 + distance) * coord[0]
-                else:
-                    total_distance += (1 - distance) * coord[0]
-            average_distance = total_distance / len(coords)
-            distance_cosine_score_for_each_taxon[scores[0]] = average_distance
+        unique_taxon_title = scores[0]
+        all_content_scores = all_cosine_scores_for_each_taxon[unique_taxon_title]
+        total_distance = 0
+        for content_score in all_content_scores:
+            total_distance += (1 + content_score) * content_score
+        if total_distance > 0:
+            total_distance /= len(all_content_scores)
+        else:
+            total_distance = float('inf')
+        distance_cosine_score_for_each_taxon[unique_taxon_title] = total_distance
     distance_cosine_score_for_each_taxon = sorted(distance_cosine_score_for_each_taxon.items(), key=operator.itemgetter(1))
     if len(distance_cosine_score_for_each_taxon) >= 1:
         best_fit = distance_cosine_score_for_each_taxon[0]
