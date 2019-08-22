@@ -79,7 +79,7 @@ def get_cosine_scores_for_sibling_and_children_taxons(current_taxon, embedded_co
     mean_cosine_score_for_each_taxon = sorted(mean_cosine_scores_for_each_taxon.items(), key=operator.itemgetter(1))
     return (mean_cosine_score_for_each_taxon, all_cosine_scores_for_each_taxon);
 
-
+# This was an attempt at a better scoring system to get around the fact that mean isn't so great
 def get_distance_cosine_scores(mean_cosine_score_for_each_taxon, all_cosine_scores_for_each_taxon):
     distance_cosine_score_for_each_taxon = {}
     for i, scores in enumerate(mean_cosine_score_for_each_taxon):
@@ -206,8 +206,6 @@ for index, row in problem_content.iterrows():
         debugging_info.append(debugging_entry(content_to_retag_base_path, current_taxon, "No siblings or children of current taxon"))
         next()
     should_be_untagged, requires_human_confirmation, more_info = can_be_untagged(current_taxon, content, content_to_retag_base_path)
-    print(should_be_untagged)
-    print(requires_human_confirmation)
     if should_be_untagged:
         if requires_human_confirmation:
             content_for_human_verification_to_untag.append([content_to_retag_base_path, current_taxon.title_and_parent_title(), more_info])
