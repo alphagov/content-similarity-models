@@ -210,7 +210,8 @@ def debugging_entry(base_path, current_taxon, debugging_info):
         'debugging_info': debugging_info
     }
 
-
+def untagging_entry(problem_content_row, current_taxon, more_info):
+    return [problem_content_row["base_path"], problem_content_row["content_id"], current_taxon.title_and_parent_title(), current_taxon.content_id, more_info]
 
 import gzip
 import ijson
@@ -255,9 +256,9 @@ for index, row in problem_content.iterrows():
     should_be_untagged, requires_human_confirmation, more_info = can_be_untagged(current_taxon, content, content_to_retag_base_path)
     if should_be_untagged:
         if requires_human_confirmation:
-            content_for_human_verification_to_untag.append([content_to_retag_base_path, current_taxon.title_and_parent_title(), more_info])
+            content_for_human_verification_to_untag.append(untagging_entry(row, current_taxon, more_info))
         else:
-            content_to_untag.append([content_to_retag_base_path, current_taxon.title_and_parent_title(), more_info])
+            content_to_untag.append(untagging_entry(row, current_taxon, more_info))
             next()
     print("Attempting_to_retag: " + content_to_retag_base_path)
     embedded_content = content[content['base_path'] == content_to_retag_base_path].iloc[0,:]['combined_text_embedding']
@@ -275,12 +276,12 @@ with open("content_to_retag.csv", 'w') as csvfile:
 
 with open("content_for_human_verification_to_untag.csv", 'w') as csvfile:
     filewriter = csv.writer(csvfile)
-    filewriter.writerow(['content_to_retag_base_path', "current_taxon", "more_info"])
+    filewriter.writerow(["content_to_untag_base_path", "content_to_untag_content_id", "current_taxon_name", "current_taxon_content_id", "more_info"])
     for row in content_for_human_verification_to_untag:
         filewriter.writerow(row)
 
 with open("content_to_untag.csv", 'w') as csvfile:
     filewriter = csv.writer(csvfile)
-    filewriter.writerow(['content_to_retag_base_path', "current_taxon", "more_info"])
+    filewriter.writerow(["content_to_untag_base_path", "content_to_untag_content_id", "current_taxon_name", "current_taxon_content_id", "more_info"])
     for row in content_to_untag:
         filewriter.writerow(row)
