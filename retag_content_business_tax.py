@@ -21,13 +21,14 @@ class Node:
         else:
             return self.title
     def recursive_children(self):
-        if self.children:
-            results = []
-            for child in self.children:
-                results.append(child.recursive_children())
-            return [item for sublist in results for item in sublist]
-        else:
-            return [self]
+        results = []
+        results.append([self])
+        for child in self.children:
+            results.append(child.recursive_children())
+        # Set to make them unique
+        flattened = flatten(results)
+        unique = list(set(flattened))
+        return unique;
     def all_siblings_and_children(self):
         if self.all_sibs_and_children is None:
             results = []
@@ -39,7 +40,7 @@ class Node:
             else:
                 for node in self.parent.children:
                     results.append(node.recursive_children())
-            flattened_results = [item for sublist in results for item in sublist]
+            flattened_results = flatten(results)
             # Remove self from results
             self.all_sibs_and_children = [result for result in flattened_results if result.content_id != self.content_id]
             return self.all_sibs_and_children
@@ -58,6 +59,13 @@ class Tree:
                 self.nodes[node.content_id] = node
     def find(self, taxon_content_id):
         return self.nodes[taxon_content_id]
+
+def flatten(S):
+    if S == []:
+        return S
+    if isinstance(S[0], list):
+        return flatten(S[0]) + flatten(S[1:])
+    return S[:1] + flatten(S[1:])
 
 # This identifies content items in a taxon that might be out of place
 # Content items are flagged if their mean score is above a particular threshold (default 0.65).
@@ -81,7 +89,7 @@ def get_misplaced_content_in_taxon(content, taxon, similarity_threshold = 0.65):
 def find_misplaced_items(content, tree):
     # Content id for money node
     money_branch_apex_node = tree.find("6acc9db4-780e-4a46-92b4-1812e3c2c48a")
-    taxons_to_search = [money_branch_apex_node] + money_branch_apex_node.all_siblings_and_children()
+    taxons_to_search = [money_branch_apex_node] + money_branch_apex_node.recursive_children()
     misplaced_items = pd.DataFrame()
     for taxon in taxons_to_search:
         misplaced_items_for_taxon = get_misplaced_content_in_taxon(content, tree.find(taxon.content_id))
@@ -94,63 +102,70 @@ def find_misplaced_items(content, tree):
 def get_embedded_sentences_for_taxon(content, taxon):
     return get_content_for_taxon(content, taxon)['combined_text_embedding'].to_list()
 
+def get_embedded_titles_for_taxon(content, taxon):
+    return get_content_for_taxon(content, taxon)['title_embedding'].to_list()
+
 def get_content_for_taxon(content, taxon):
     content_taxon_mapping_path = os.path.join(DATADIR, 'content_to_taxon_map.csv')
     content_taxon_mapping = pd.read_csv(content_taxon_mapping_path, low_memory=False)
     content_ids_for_taxon = list(content_taxon_mapping[content_taxon_mapping['taxon_id'] == taxon.content_id]['content_id'])
     return content[content['content_id'].isin(content_ids_for_taxon)];
 
-def get_score_for_item(content, all_content, taxon):
+def get_score_for_item(content, title, all_content, taxon):
     embedded_sentences_for_taxon = get_embedded_sentences_for_taxon(all_content, taxon)
     if not embedded_sentences_for_taxon:
-        return [], -1;
+        return [], [], -1;
     content_generator = pairwise_distances_chunked(
         X=[content],
         Y=embedded_sentences_for_taxon,
         working_memory=0,
         metric='cosine',
         n_jobs=-1)
-    cosine_scores = list(enumerate(content_generator))[0][1][0]
-    cosine_scores.sort()
-    return cosine_scores, cosine_scores.mean();
+    content_cosine_scores = list(enumerate(content_generator))[0][1][0]
+    content_mean = content_cosine_scores.mean()
+    # COMMENTED OUT BECAUSE WE'RE TRYING WITH TITLES
+    # title_generator = pairwise_distances_chunked(
+    #     X=[title],
+    #     Y=get_embedded_titles_for_taxon(all_content, taxon),
+    #     working_memory=0,
+    #     metric='cosine',
+    #     n_jobs=-1)
+    # title_cosine_scores = list(enumerate(title_generator))[0][1][0]
+    # title_mean = content_cosine_scores.mean()
+    # return (content_cosine_scores, title_cosine_scores, title_mean + content_mean);
+    return (content_cosine_scores, [], content_mean);
 
-def get_cosine_scores_for_sibling_and_children_taxons(current_taxon, embedded_content, content):
+def get_cosine_scores_for_sibling_and_children_taxons(current_taxon, embedded_content, embedded_title, content):
     mean_cosine_scores_for_each_taxon = {}
-    all_cosine_scores_for_each_taxon = {}
+    all_content_cosine_scores_for_each_taxon = {}
+    all_title_cosine_scores_for_each_taxon = {}
     for i, taxon in enumerate(current_taxon.all_siblings_and_children()):
-        all_scores, mean = get_score_for_item(embedded_content, content, taxon)
+        content_scores, title_scores, mean = get_score_for_item(embedded_content, embedded_title, content, taxon)
         if mean > -1:
-            all_cosine_scores_for_each_taxon[taxon.unique_title()] = all_scores
+            all_content_cosine_scores_for_each_taxon[taxon.unique_title()] = content_scores
+            all_title_cosine_scores_for_each_taxon[taxon.unique_title()] = title_scores
             mean_cosine_scores_for_each_taxon[taxon.unique_title()] = mean
     mean_cosine_score_for_each_taxon = sorted(mean_cosine_scores_for_each_taxon.items(), key=operator.itemgetter(1))
-    return (mean_cosine_score_for_each_taxon, all_cosine_scores_for_each_taxon);
+    return (mean_cosine_score_for_each_taxon, all_content_cosine_scores_for_each_taxon, all_title_cosine_scores_for_each_taxon);
 
 # This was an attempt at a better scoring system to get around the fact that mean isn't so great
-def get_distance_cosine_scores(mean_cosine_score_for_each_taxon, all_cosine_scores_for_each_taxon):
+def get_distance_cosine_scores(mean_cosine_score_for_each_taxon, all_content_cosine_scores_for_each_taxon, all_title_cosine_scores_for_each_taxon):
     distance_cosine_score_for_each_taxon = {}
     for i, scores in enumerate(mean_cosine_score_for_each_taxon):
-        # Here we make a 2D 'graph' of the scores below 0.5 and calculate just one K-means centroid
-        # We calculate the distance from the centroid for each score. The distance is then multiplied by the score
-        # for that distance and penalised if it is above (and penalised more for how much further it is above)
-        # and rewarded if it is below (and rewarded more if it is further below)
-        all_scores = all_cosine_scores_for_each_taxon[scores[0]]
-        coords = []
-        for score in all_scores:
-            if score <= 0.5:
-                coords.append([score, score])
-        if coords:
-            X = np.array(coords)
-            kmeans = KMeans(n_clusters=1, random_state=0).fit(X)
-            centroid = kmeans.cluster_centers_[0]
-            total_distance = 0
-            for coord_index, coord in enumerate(coords):
-                distance = calculate_distance(coord[0], coord[1], centroid[0], centroid[1])
-                if coord[0] > centroid[0]:
-                    total_distance += (1 + distance) * coord[0]
-                else:
-                    total_distance += (1 - distance) * coord[0]
-            average_distance = total_distance / len(coords)
-            distance_cosine_score_for_each_taxon[scores[0]] = average_distance
+        unique_taxon_title = scores[0]
+        all_content_scores = all_content_cosine_scores_for_each_taxon[unique_taxon_title]
+        all_title_scores = all_title_cosine_scores_for_each_taxon[unique_taxon_title]
+        total_distance = 0
+        for index, content_score in enumerate(all_content_scores):
+            # COMMENTED OUT BECAUSE WE"RE TRYING WITHOUT TITLES
+            # title_score = all_title_scores[index]
+            # total_distance += (1 + title_score) * title_score
+            total_distance += (1 + content_score) * content_score
+        if total_distance > 0:
+            total_distance /= len(all_content_scores)
+        else:
+            total_distance = float('inf')
+        distance_cosine_score_for_each_taxon[unique_taxon_title] = total_distance
     distance_cosine_score_for_each_taxon = sorted(distance_cosine_score_for_each_taxon.items(), key=operator.itemgetter(1))
     if len(distance_cosine_score_for_each_taxon) >= 1:
         best_fit = distance_cosine_score_for_each_taxon[0]
@@ -210,8 +225,7 @@ def debugging_entry(base_path, current_taxon, debugging_info):
         'debugging_info': debugging_info
     }
 
-def untagging_entry(problem_content_row, current_taxon, more_info):
-    return [problem_content_row["base_path"], problem_content_row["content_id"], current_taxon.title_and_parent_title(), current_taxon.content_id, more_info]
+
 
 import gzip
 import ijson
@@ -219,8 +233,6 @@ import os
 import pandas as pd
 from sklearn.metrics import pairwise_distances, pairwise_distances_chunked
 import operator
-import numpy as np
-from sklearn.cluster import KMeans
 import math
 import csv
 
@@ -252,19 +264,20 @@ for index, row in problem_content.iterrows():
     if not current_taxon.all_siblings_and_children():
         # No children or siblings in the same branch for current taxon, at moment just leave it there
         debugging_info.append(debugging_entry(content_to_retag_base_path, current_taxon, "No siblings or children of current taxon"))
-        next()
+        continue
     should_be_untagged, requires_human_confirmation, more_info = can_be_untagged(current_taxon, content, content_to_retag_base_path)
     if should_be_untagged:
         if requires_human_confirmation:
-            content_for_human_verification_to_untag.append(untagging_entry(row, current_taxon, more_info))
+            content_for_human_verification_to_untag.append([content_to_retag_base_path, current_taxon.title_and_parent_title(), more_info])
         else:
-            content_to_untag.append(untagging_entry(row, current_taxon, more_info))
-            next()
+            content_to_untag.append([content_to_retag_base_path, current_taxon.title_and_parent_title(), more_info])
+            continue
     print("Attempting_to_retag: " + content_to_retag_base_path)
     embedded_content = content[content['base_path'] == content_to_retag_base_path].iloc[0,:]['combined_text_embedding']
+    embedded_title = content[content['base_path'] == content_to_retag_base_path].iloc[0,:]['title_embedding']
     # Get the score of the content item against all items
-    mean_cosine_score_for_each_taxon, all_cosine_scores_for_each_taxon = get_cosine_scores_for_sibling_and_children_taxons(current_taxon, embedded_content, content)
-    best_distance_suggestion, best_distance_cosine_score, distance_cosine_scores = get_distance_cosine_scores(mean_cosine_score_for_each_taxon, all_cosine_scores_for_each_taxon)
+    mean_cosine_score_for_each_taxon, all_content_cosine_scores_for_each_taxon, all_title_cosine_scores_for_each_taxon = get_cosine_scores_for_sibling_and_children_taxons(current_taxon, embedded_content, embedded_title, content)
+    best_distance_suggestion, best_distance_cosine_score, distance_cosine_scores = get_distance_cosine_scores(mean_cosine_score_for_each_taxon, all_content_cosine_scores_for_each_taxon, all_title_cosine_scores_for_each_taxon)
     if best_distance_cosine_score is not None:
         content_to_retag.append([content_to_retag_base_path, current_taxon.title_and_parent_title(), best_distance_suggestion, best_distance_cosine_score, distance_cosine_scores])
 
@@ -276,12 +289,12 @@ with open("content_to_retag.csv", 'w') as csvfile:
 
 with open("content_for_human_verification_to_untag.csv", 'w') as csvfile:
     filewriter = csv.writer(csvfile)
-    filewriter.writerow(["content_to_untag_base_path", "content_to_untag_content_id", "current_taxon_name", "current_taxon_content_id", "more_info"])
+    filewriter.writerow(['content_to_retag_base_path', "current_taxon", "more_info"])
     for row in content_for_human_verification_to_untag:
         filewriter.writerow(row)
 
 with open("content_to_untag.csv", 'w') as csvfile:
     filewriter = csv.writer(csvfile)
-    filewriter.writerow(["content_to_untag_base_path", "content_to_untag_content_id", "current_taxon_name", "current_taxon_content_id", "more_info"])
+    filewriter.writerow(['content_to_retag_base_path', "current_taxon", "more_info"])
     for row in content_to_untag:
         filewriter.writerow(row)
