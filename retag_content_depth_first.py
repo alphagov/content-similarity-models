@@ -1,3 +1,12 @@
+import gzip
+import ijson
+import os
+import pandas as pd
+from sklearn.metrics import pairwise_distances, pairwise_distances_chunked
+import operator
+import math
+import csv
+
 
 class Node:
     def __init__(self, entry, all_nodes):
@@ -130,41 +139,42 @@ def get_content_for_taxon(content, taxon):
     return content[content['content_id'].isin(content_ids_for_taxon)];
 
 def get_score_for_item(content, title, all_content, taxon):
+    content_for_taxon = get_content_for_taxon(all_content, taxon).copy()
     embedded_sentences_for_taxon = get_embedded_sentences_for_taxon(all_content, taxon)
     if not embedded_sentences_for_taxon:
-        return [], [], -1;
+        return [], float('inf');
     content_generator = pairwise_distances_chunked(
         X=[content],
         Y=embedded_sentences_for_taxon,
         working_memory=0,
         metric='cosine',
         n_jobs=-1)
-    content_cosine_scores = list(enumerate(content_generator))[0][1][0]
-    content_mean = content_cosine_scores.mean()
-    # COMMENTED OUT BECAUSE WE'RE TRYING WITH TITLES
-    # title_generator = pairwise_distances_chunked(
-    #     X=[title],
-    #     Y=get_embedded_titles_for_taxon(all_content, taxon),
-    #     working_memory=0,
-    #     metric='cosine',
-    #     n_jobs=-1)
-    # title_cosine_scores = list(enumerate(title_generator))[0][1][0]
-    # title_mean = content_cosine_scores.mean()
-    # return (content_cosine_scores, title_cosine_scores, title_mean + content_mean);
-    return (content_cosine_scores, [], content_mean);
+    content_for_taxon['cosine_score_to_content'] = list(enumerate(content_generator))[0][1][0]
+    taxon_score = float('inf')
+    cosine_scores_less_than_half = []
+    for index, row in content_for_taxon.iterrows():
+        if row['cosine_score_to_content'] <= 0.5:
+            content_generator = pairwise_distances_chunked(
+                X=[row['combined_text_embedding']],
+                Y=embedded_sentences_for_taxon,
+                working_memory=0,
+                metric='cosine',
+                n_jobs=-1)
+            mean = list(enumerate(content_generator))[0][1][0].mean()
+            if mean <= 0.6:
+                cosine_scores_less_than_half.append(row['cosine_score_to_content'])
+    if any(cosine_scores_less_than_half):
+        taxon_score = sum(cosine_scores_less_than_half) / len(cosine_scores_less_than_half)
+    return (cosine_scores_less_than_half, taxon_score);
 
-def get_cosine_scores_for_sibling_and_children_taxons(current_taxon, embedded_content, embedded_title, content):
+def get_cosine_scores_for(taxons, embedded_content, embedded_title, content):
     mean_cosine_scores_for_each_taxon = {}
-    all_content_cosine_scores_for_each_taxon = {}
-    all_title_cosine_scores_for_each_taxon = {}
-    for i, taxon in enumerate(current_taxon.all_siblings_and_children()):
-        content_scores, title_scores, mean = get_score_for_item(embedded_content, embedded_title, content, taxon)
-        if mean > -1:
-            all_content_cosine_scores_for_each_taxon[taxon] = content_scores
-            all_title_cosine_scores_for_each_taxon[taxon] = title_scores
+    for i, taxon in enumerate(taxons):
+        content_scores, mean = get_score_for_item(embedded_content, embedded_title, content, taxon)
+        if mean < 100:
             mean_cosine_scores_for_each_taxon[taxon] = mean
     mean_cosine_score_for_each_taxon = sorted(mean_cosine_scores_for_each_taxon.items(), key=operator.itemgetter(1))
-    return (mean_cosine_score_for_each_taxon, all_content_cosine_scores_for_each_taxon, all_title_cosine_scores_for_each_taxon);
+    return mean_cosine_score_for_each_taxon
 
 # This was an attempt at a better scoring system to get around the fact that mean isn't so great
 def get_distance_cosine_scores(mean_cosine_score_for_each_taxon, all_content_cosine_scores_for_each_taxon, all_title_cosine_scores_for_each_taxon):
@@ -249,17 +259,6 @@ def debugging_entry(base_path, current_taxon, debugging_info):
     }
 
 
-
-import gzip
-import ijson
-import os
-import pandas as pd
-from sklearn.metrics import pairwise_distances, pairwise_distances_chunked
-import operator
-import math
-import csv
-
-
 DATADIR = os.getenv("DATADIR")
 if DATADIR is None:
     print("You must set a DATADIR environment variable, see the readme in alphagov/govuk-taxonomy-supervised-learning repo for more details")
@@ -273,53 +272,73 @@ labelled = pd.read_csv(labelled_file_path, compression='gzip', low_memory=False)
 
 clean_content_path = os.path.join(DATADIR, 'embedded_clean_content.pkl')
 content = pd.read_pickle(clean_content_path)
+apex_node = tree.find("6acc9db4-780e-4a46-92b4-1812e3c2c48a")
 
-for apex_node in tree.apex_nodes()[2:]:
-    # Load misplaced items
-    problem_content = find_misplaced_items(apex_node, content, tree)
+# Load misplaced items
+problem_content = find_misplaced_items(apex_node, content, tree)
 
-    content_to_retag = []
-    content_for_human_verification_to_untag = []
-    content_to_untag = []
-    debugging_info = []
-    for index, row in problem_content.iterrows():
-        content_to_retag_base_path = row["base_path"]
-        current_taxon = tree.find(row["taxon_id"])
-        print(content_to_retag_base_path)
-        if not current_taxon.all_siblings_and_children():
-            # No children or siblings in the same branch for current taxon, at moment just leave it there
-            debugging_info.append(debugging_entry(content_to_retag_base_path, current_taxon, "No siblings or children of current taxon"))
+content_to_retag = []
+content_for_human_verification_to_untag = []
+content_to_untag = []
+debugging_info = []
+for index, row in problem_content.iterrows():
+    content_to_retag_base_path = row["base_path"]
+    current_taxon = tree.find(row["taxon_id"])
+    print(content_to_retag_base_path)
+    if not current_taxon.all_siblings_and_children():
+        # No children or siblings in the same branch for current taxon, at moment just leave it there
+        debugging_info.append(debugging_entry(content_to_retag_base_path, current_taxon, "No siblings or children of current taxon"))
+        continue
+    should_be_untagged, requires_human_confirmation, more_info = can_be_untagged(current_taxon, content, row["content_id"])
+    if should_be_untagged:
+        if requires_human_confirmation:
+            content_for_human_verification_to_untag.append([content_to_retag_base_path, current_taxon.title, current_taxon.base_path, more_info])
+        else:
+            content_to_untag.append([content_to_retag_base_path, current_taxon.title, current_taxon.base_path, more_info])
             continue
-        should_be_untagged, requires_human_confirmation, more_info = can_be_untagged(current_taxon, content, row["content_id"])
-        if should_be_untagged:
-            if requires_human_confirmation:
-                content_for_human_verification_to_untag.append([content_to_retag_base_path, current_taxon.title, current_taxon.base_path, more_info])
+    print("Attempting_to_retag: " + content_to_retag_base_path)
+    embedded_content = content[content['base_path'] == content_to_retag_base_path].iloc[0,:]['combined_text_embedding']
+    # Get the score of the current taxon so we can see if it's children do any better
+    scores_for_current_taxon = get_cosine_scores_for([apex_node], embedded_content, [], content)
+    print(scores_for_current_taxon)
+    if scores_for_current_taxon:
+        best_score = scores_for_current_taxon[0][1]
+        node = apex_node
+        while any(node.children):
+            print("Looking at children of " + node.title)
+            cosine_score_for_each_taxon = get_cosine_scores_for(node.children, embedded_content, [], content)
+            if not cosine_score_for_each_taxon:
+                # There are no scores, so none were relevant, we can break
+                break
             else:
-                content_to_untag.append([content_to_retag_base_path, current_taxon.title, current_taxon.base_path, more_info])
-                continue
-        print("Attempting_to_retag: " + content_to_retag_base_path)
-        embedded_content = content[content['base_path'] == content_to_retag_base_path].iloc[0,:]['combined_text_embedding']
-        embedded_title = content[content['base_path'] == content_to_retag_base_path].iloc[0,:]['title_embedding']
-        # Get the score of the content item against all items
-        mean_cosine_score_for_each_taxon, all_content_cosine_scores_for_each_taxon, all_title_cosine_scores_for_each_taxon = get_cosine_scores_for_sibling_and_children_taxons(apex_node, embedded_content, embedded_title, content)
-        best_distance_suggestion_taxon, best_distance_cosine_score, distance_cosine_scores = get_distance_cosine_scores(mean_cosine_score_for_each_taxon, all_content_cosine_scores_for_each_taxon, all_title_cosine_scores_for_each_taxon)
-        if best_distance_cosine_score is not None:
-            content_to_retag.append([content_to_retag_base_path, current_taxon.title_and_parent_title(), current_taxon.base_path, best_distance_suggestion_taxon.content_id, best_distance_suggestion_taxon.title, best_distance_suggestion_taxon.title_and_parent_title(), best_distance_suggestion_taxon.base_path, best_distance_cosine_score, distance_cosine_scores])
+                best_taxon = cosine_score_for_each_taxon[0][0]
+                lowest_score_for_children = cosine_score_for_each_taxon[0][1]
+                if lowest_score_for_children < best_score:
+                    # There is a child taxon which has a better score, so carry on down the tree
+                    print("Best taxon is: " + best_taxon.title)
+                    print("Which has score of: " + str(lowest_score_for_children))
+                    best_score = lowest_score_for_children
+                    node = best_taxon
+                else:
+                    # There are no child taxa with a better score, so we have already converged
+                    break
+        if node is not apex_node:
+            content_to_retag.append([content_to_retag_base_path, current_taxon.title_and_parent_title(), current_taxon.base_path, node.content_id, node.title, node.title_and_parent_title(), node.base_path, best_score, []])
 
-    with open("content_to_retag_" + apex_node.title + ".csv", 'w') as csvfile:
-        filewriter = csv.writer(csvfile)
-        filewriter.writerow(['content_to_retag_base_path', 'current_taxon_title', 'current_taxon_base_path', 'suggestion_content_id', 'suggestion_title', 'suggestion_title_and_level_1', 'suggestion_base_path', 'suggestion_cosine_score', 'other_suggestions'])
-        for row in content_to_retag:
-            filewriter.writerow(row)
+with open("depth_first_content_to_retag_" + apex_node.title + ".csv", 'w') as csvfile:
+    filewriter = csv.writer(csvfile)
+    filewriter.writerow(['content_to_retag_base_path', 'current_taxon_title', 'current_taxon_base_path', 'suggestion_content_id', 'suggestion_title', 'suggestion_title_and_level_1', 'suggestion_base_path', 'suggestion_cosine_score', 'other_suggestions'])
+    for row in content_to_retag:
+        filewriter.writerow(row)
 
-    with open("content_for_human_verification_to_untag_" + apex_node.title + ".csv", 'w') as csvfile:
-        filewriter = csv.writer(csvfile)
-        filewriter.writerow(['content_to_retag_base_path', "current_taxon", "current_taxon_base_path", "more_info"])
-        for row in content_for_human_verification_to_untag:
-            filewriter.writerow(row)
+with open("depth_first_content_for_human_verification_to_untag_" + apex_node.title + ".csv", 'w') as csvfile:
+    filewriter = csv.writer(csvfile)
+    filewriter.writerow(['content_to_retag_base_path', "current_taxon", "current_taxon_base_path", "more_info"])
+    for row in content_for_human_verification_to_untag:
+        filewriter.writerow(row)
 
-    with open("content_to_untag_" + apex_node.title + ".csv", 'w') as csvfile:
-        filewriter = csv.writer(csvfile)
-        filewriter.writerow(['content_to_retag_base_path', "current_taxon", "current_taxon_base_path", "more_info"])
-        for row in content_to_untag:
-            filewriter.writerow(row)
+with open("depth_first_content_to_untag_" + apex_node.title + ".csv", 'w') as csvfile:
+    filewriter = csv.writer(csvfile)
+    filewriter.writerow(['content_to_retag_base_path', "current_taxon", "current_taxon_base_path", "more_info"])
+    for row in content_to_untag:
+        filewriter.writerow(row)
