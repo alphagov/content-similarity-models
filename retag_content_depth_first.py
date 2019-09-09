@@ -182,18 +182,8 @@ def get_distance_cosine_scores(mean_cosine_score_for_each_taxon, all_content_cos
     for i, scores in enumerate(mean_cosine_score_for_each_taxon):
         taxon = scores[0]
         all_content_scores = all_content_cosine_scores_for_each_taxon[taxon]
-        all_title_scores = all_title_cosine_scores_for_each_taxon[taxon]
+        # all_title_scores = all_title_cosine_scores_for_each_taxon[taxon]
         total_distance = all_content_scores.mean()
-        # total_distance = 0
-        # for index, content_score in enumerate(all_content_scores):
-        #     # COMMENTED OUT BECAUSE WE"RE TRYING WITHOUT TITLES
-        #     # title_score = all_title_scores[index]
-        #     # total_distance += (1 + title_score) * title_score
-        #     total_distance += (1 + content_score) * content_score
-        # if total_distance > 0:
-        #     total_distance /= len(all_content_scores)
-        # else:
-        #     total_distance = float('inf')
         distance_cosine_score_for_each_taxon[taxon] = total_distance
     distance_cosine_score_for_each_taxon = sorted(distance_cosine_score_for_each_taxon.items(), key=operator.itemgetter(1))
     if len(distance_cosine_score_for_each_taxon) >= 1:
