@@ -274,7 +274,7 @@ labelled = pd.read_csv(labelled_file_path, compression='gzip', low_memory=False)
 clean_content_path = os.path.join(DATADIR, 'embedded_clean_content.pkl')
 content = pd.read_pickle(clean_content_path)
 
-for apex_node in tree.apex_nodes()[2:]:
+for apex_node in tree.apex_nodes():
     # Load misplaced items
     problem_content = find_misplaced_items(apex_node, content, tree)
 
@@ -297,6 +297,7 @@ for apex_node in tree.apex_nodes()[2:]:
             else:
                 content_to_untag.append([content_to_retag_base_path, current_taxon.title, current_taxon.base_path, more_info])
                 continue
+        continue
         print("Attempting_to_retag: " + content_to_retag_base_path)
         embedded_content = content[content['base_path'] == content_to_retag_base_path].iloc[0,:]['combined_text_embedding']
         embedded_title = content[content['base_path'] == content_to_retag_base_path].iloc[0,:]['title_embedding']
