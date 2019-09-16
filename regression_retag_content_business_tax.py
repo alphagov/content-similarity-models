@@ -2,15 +2,12 @@ import gzip
 import ijson
 import os
 import pandas as pd
-from sklearn.metrics import pairwise_distances, pairwise_distances_chunked
-import operator
-import math
+from sklearn.metrics import pairwise_distances
 import csv
 from nltk.stem.porter import PorterStemmer
 import nltk
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-import pry
 
 class Node:
     def __init__(self, entry, all_nodes):
@@ -73,7 +70,6 @@ class Node:
         return self.parent is None
 
 
-
 class Tree:
     def __init__(self, datadir):
         self.nodes = {}
@@ -122,7 +118,7 @@ def find_misplaced_items(apex_node, content, tree):
     taxons_to_search = [apex_node] + apex_node.recursive_children()
     misplaced_items = pd.DataFrame()
     for taxon in taxons_to_search:
-        misplaced_items_for_taxon = get_misplaced_content_in_taxon(content, tree.find(taxon.content_id))
+        misplaced_items_for_taxon = get_misplaced_content_in_taxon(content, tree.find(taxon.content_id), 0.6)
         misplaced_items = misplaced_items.append(misplaced_items_for_taxon)
     unique_misplaced_items = misplaced_items.drop_duplicates(subset=['content_id','taxon_id'])
     problem_content_path = os.path.join(DATADIR, f"problem_content_#{apex_node.title}.csv")
@@ -157,26 +153,29 @@ def get_content_for_taxon(content, taxon):
 models = {} # global variable
 vectorizers = {}
 
-# THIS IS WHERE I WAS
-def get_score_for(sibling_taxons, content_item_content, empty_arry, content):
+def get_score_for(current_node, child_taxons, content_item_content, empty_arry, content):
     global models
     global vectorizers
-    model = None
-    vectorizer = None
-    content_ids = [taxon.content_id for taxon in sibling_taxons]
+    content_ids = [taxon.content_id for taxon in child_taxons]
     content_ids.sort()
     key = ",".join(content_ids)
     if key not in models:
         texts = []
         y = []
-        for sibling_taxon in sibling_taxons:
+        for child_taxon in child_taxons:
+            if child_taxon.content_id == current_node.content_id:
+                # Ignore taxon if its the same as the current one
+                print("Ignoring " + child_taxon.title + " as its the same as " + current_node.title)
+                continue
             length_of_content = []
-            for taxon in sibling_taxon.children + [sibling_taxon]:
+            print("looking at all children of " + child_taxon.title)
+            for taxon in child_taxon.recursive_children():
+                print("Those children include: " + taxon.title)
                 for i, content_item in get_content_for_taxon(content, taxon).iterrows():
                     texts.append(content_item['combined_text'])
-                    y.append(sibling_taxon.content_id)
+                    y.append(child_taxon.content_id)
                     length_of_content.append(len(tokenize(content_item['combined_text'])))
-            length_of_content.sort()
+        length_of_content.sort()
         if len(list(set(y))) <= 1 or len(length_of_content) == 0:
             print("One or fewer classes, returning early")
             return (False, False);
@@ -234,7 +233,7 @@ tree = Tree(DATADIR)
 # Load in data
 clean_content_path = os.path.join(DATADIR, 'embedded_clean_content.pkl')
 content = pd.read_pickle(clean_content_path)
-apex_node = tree.find("6acc9db4-780e-4a46-92b4-1812e3c2c48a")
+apex_node = tree.find("c58fdadd-7743-46d6-9629-90bb3ccc4ef0")
 
 # Load misplaced items
 problem_content = find_misplaced_items(apex_node, content, tree)
@@ -266,11 +265,11 @@ for index, row in problem_content.iterrows():
     # Get the score of the current taxon so we can see if it's children do any better
     scores_for_current_taxon = -1
     if scores_for_current_taxon:
-        best_score = scores_for_current_taxon#[0][1]
+        best_score = scores_for_current_taxon
         node = apex_node
         while any(node.children):
             print("Looking at children of " + node.title)
-            taxon_content_id, probability = get_score_for(node.children, content_item_content, [], content)
+            taxon_content_id, probability = get_score_for(node, node.children, content_item_content, [], content)
             if not taxon_content_id:
                 # There are no scores, so none were relevant, we can break
                 break
@@ -283,7 +282,7 @@ for index, row in problem_content.iterrows():
         if node is not apex_node and node is not current_taxon:
             content_to_retag.append([content_to_retag_base_path, current_taxon.title_and_parent_title(), current_taxon.base_path, node.content_id, node.title, node.title_and_parent_title(), node.base_path, best_score, []])
 
-with open("depth_first_content_to_retag_" + apex_node.title + "_dynamic_feature_count_features.csv", 'w') as csvfile:
+with open("content_to_retag_" + apex_node.title + ".csv", 'w') as csvfile:
     filewriter = csv.writer(csvfile)
     filewriter.writerow(['content_to_retag_base_path', 'current_taxon_title', 'current_taxon_base_path', 'suggestion_content_id', 'suggestion_title', 'suggestion_title_and_level_1', 'suggestion_base_path', 'suggestion_cosine_score', 'other_suggestions'])
     for row in content_to_retag:

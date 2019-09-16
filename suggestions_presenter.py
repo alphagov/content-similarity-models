@@ -61,7 +61,7 @@ def get_retagging_content(retagging_info, content_item):
     full_url = "https://www.gov.uk" + content_item["base_path"]
     move_from = get_taxon_name_path(retagging_info["current_taxon_base_path"])
     move_to = get_taxon_name_path(retagging_info["suggestion_base_path"])
-    move_to_other_content_url = f"https://content-tagger.staging.publishing.service.gov.uk/taxons/{retagging_info['suggestion_content_id']}/tagged_content"
+    move_to_other_content_url = f"https://www.gov.uk{retagging_info['suggestion_base_path']}"
     return f"<h2 class='inline'>{title}</h2><a class='inline' href='{full_url}' target='_blank'>Link to page</a><h4>Move from: {move_from}</h4><h4>Move to: {move_to}</h4><a class='tab' target='_blank' href='{move_to_other_content_url}'>Other content tagged to it</a><h4>Currently tagged to</h4>{current_taxons}<h4>Description</h4><p>{description}</p><h4>Body</h4><p>{body}</p>"
 
 def get_untagging_content(untagging_info, content_item):
